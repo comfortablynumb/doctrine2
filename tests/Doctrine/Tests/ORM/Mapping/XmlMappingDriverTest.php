@@ -21,6 +21,7 @@ class XmlMappingDriverTest extends AbstractMappingDriverTest
         $mappingDriver = $this->_loadDriver();
 
         $class = new ClassMetadata($className);
+        $class->initializeReflection(new \Doctrine\Common\Persistence\Mapping\RuntimeReflectionService);
         $mappingDriver->loadMetadataForClass($className, $class);
 
         $expectedMap = array(
@@ -82,6 +83,16 @@ class XmlMappingDriverTest extends AbstractMappingDriverTest
             array(__DIR__ . "/xml/Doctrine.Tests.ORM.Mapping.User.dcm.xml"),
             array(__DIR__ . "/xml/CatNoId.dcm.xml"),
         );
+    }
+
+    /**
+     * @group DDC-889
+     * @expectedException Doctrine\ORM\Mapping\MappingException
+     * @expectedExceptionMessage Invalid mapping file 'Doctrine.Tests.Models.DDC889.DDC889Class.dcm.xml' for class 'Doctrine\Tests\Models\DDC889\DDC889Class'.
+     */
+    public function testinvalidEntityOrMappedSuperClassShouldMentionParentClasses()
+    {
+        $this->createClassMetadata('Doctrine\Tests\Models\DDC889\DDC889Class');
     }
 }
 

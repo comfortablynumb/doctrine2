@@ -75,7 +75,7 @@ class Expr
      * Creates an ASCending order expression.
      *
      * @param $sort
-     * @return OrderBy
+     * @return Expr\OrderBy
      */
     public function asc($expr)
     {
@@ -86,7 +86,7 @@ class Expr
      * Creates a DESCending order expression.
      *
      * @param $sort
-     * @return OrderBy
+     * @return Expr\OrderBy
      */
     public function desc($expr)
     {
@@ -562,6 +562,8 @@ class Expr
     {
         if (is_numeric($literal) && !is_string($literal)) {
             return (string) $literal;
+        } else if (is_bool($literal)) {
+            return $literal ? "true" : "false";
         } else {
             return "'" . str_replace("'", "''", $literal) . "'";
         }

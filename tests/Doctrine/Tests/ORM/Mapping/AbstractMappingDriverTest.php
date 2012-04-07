@@ -18,9 +18,25 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
         $mappingDriver = $this->_loadDriver();
 
         $class = new ClassMetadata($entityClassName);
+        $class->initializeReflection(new \Doctrine\Common\Persistence\Mapping\RuntimeReflectionService);
         $mappingDriver->loadMetadataForClass($entityClassName, $class);
 
         return $class;
+    }
+
+    /**
+     * @param \Doctrine\ORM\EntityManager $entityClassName
+     * @return \Doctrine\ORM\Mapping\ClassMetadataFactory
+     */
+    protected function createClassMetadataFactory(\Doctrine\ORM\EntityManager $em = null)
+    {
+        $driver     = $this->_loadDriver();
+        $em         = $em ?: $this->_getTestEntityManager();
+        $factory    = new \Doctrine\ORM\Mapping\ClassMetadataFactory();
+        $em->getConfiguration()->setMetadataDriverImpl($driver);
+        $factory->setEntityManager($em);
+
+        return $factory;
     }
 
     public function testLoadMapping()
@@ -76,6 +92,21 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
      * @depends testEntityTableNameAndInheritance
      * @param ClassMetadata $class
      */
+    public function testEntityOptions($class)
+    {
+        $this->assertArrayHasKey('options', $class->table, 'ClassMetadata should have options key in table property.');
+
+        $this->assertEquals(array(
+            'foo' => 'bar', 'baz' => array('key' => 'val')
+        ), $class->table['options']);
+
+        return $class;
+    }
+
+    /**
+     * @depends testEntityOptions
+     * @param ClassMetadata $class
+     */
     public function testEntitySequence($class)
     {
         $this->assertInternalType('array', $class->sequenceGeneratorDefinition, 'No Sequence Definition set on this driver.');
@@ -87,6 +118,18 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
             ),
             $class->sequenceGeneratorDefinition
         );
+    }
+
+    public function testEntityCustomGenerator()
+    {
+        $class = $this->createClassMetadata('Doctrine\Tests\ORM\Mapping\Animal');
+
+        $this->assertEquals(ClassMetadata::GENERATOR_TYPE_CUSTOM,
+            $class->generatorType, "Generator Type");
+        $this->assertEquals(
+            array("class" => "stdClass"),
+            $class->customGeneratorDefinition,
+            "Custom Generator Definition");
     }
 
 
@@ -127,6 +170,9 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
         $this->assertEquals(50, $class->fieldMappings['name']['length']);
         $this->assertTrue($class->fieldMappings['name']['nullable']);
         $this->assertTrue($class->fieldMappings['name']['unique']);
+
+        $expected = array('foo' => 'bar', 'baz' => array('key' => 'val'));
+        $this->assertEquals($expected, $class->fieldMappings['name']['options']);
 
         return $class;
     }
@@ -298,12 +344,8 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
      */
     public function testMappedSuperclassWithRepository()
     {
-        $driver     = $this->_loadDriver();
         $em         = $this->_getTestEntityManager();
-        $factory    = new \Doctrine\ORM\Mapping\ClassMetadataFactory();
-
-        $em->getConfiguration()->setMetadataDriverImpl($driver);
-        $factory->setEntityManager($em);
+        $factory    = $this->createClassMetadataFactory($em);
 
 
         $class = $factory->getMetadataFor('Doctrine\Tests\Models\DDC869\DDC869CreditCardPayment');
@@ -334,12 +376,8 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
      */
     public function testDefaultFieldType()
     {
-        $driver     = $this->_loadDriver();
         $em         = $this->_getTestEntityManager();
-        $factory    = new \Doctrine\ORM\Mapping\ClassMetadataFactory();
-
-        $em->getConfiguration()->setMetadataDriverImpl($driver);
-        $factory->setEntityManager($em);
+        $factory    = $this->createClassMetadataFactory($em);
 
 
         $class = $factory->getMetadataFor('Doctrine\Tests\Models\DDC1476\DDC1476EntityWithDefaultFieldType');
@@ -392,6 +430,64 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
         $this->assertEquals("INT unsigned NOT NULL", $class->fieldMappings['id']['columnDefinition']);
         $this->assertEquals("VARCHAR(255) NOT NULL", $class->fieldMappings['value']['columnDefinition']);
     }
+
+    /**
+     * @group DDC-559
+     */
+    public function testNamingStrategy()
+    {
+        $em         = $this->_getTestEntityManager();
+        $factory    = $this->createClassMetadataFactory($em);
+
+
+        $this->assertInstanceOf('Doctrine\ORM\Mapping\DefaultNamingStrategy', $em->getConfiguration()->getNamingStrategy());
+        $em->getConfiguration()->setNamingStrategy(new \Doctrine\ORM\Mapping\UnderscoreNamingStrategy(CASE_UPPER));
+        $this->assertInstanceOf('Doctrine\ORM\Mapping\UnderscoreNamingStrategy', $em->getConfiguration()->getNamingStrategy());
+
+        $class = $factory->getMetadataFor('Doctrine\Tests\Models\DDC1476\DDC1476EntityWithDefaultFieldType');
+
+        $this->assertEquals('ID', $class->columnNames['id']);
+        $this->assertEquals('NAME', $class->columnNames['name']);
+        $this->assertEquals('DDC1476ENTITY_WITH_DEFAULT_FIELD_TYPE', $class->table['name']);
+    }
+
+    /**
+     * @group DDC-807
+     * @group DDC-553
+     */
+    public function testDiscriminatorColumnDefinition()
+    {
+        $class = $this->createClassMetadata(__NAMESPACE__ . '\DDC807Entity');
+
+        $this->assertArrayHasKey('columnDefinition', $class->discriminatorColumn);
+        $this->assertArrayHasKey('name', $class->discriminatorColumn);
+
+        $this->assertEquals("ENUM('ONE','TWO')", $class->discriminatorColumn['columnDefinition']);
+        $this->assertEquals("dtype", $class->discriminatorColumn['name']);
+    }
+
+    /**
+     * @group DDC-889
+     * @expectedException Doctrine\ORM\Mapping\MappingException
+     * @expectedExceptionMessage Class "Doctrine\Tests\Models\DDC889\DDC889Class" sub class of "Doctrine\Tests\Models\DDC889\DDC889SuperClass" is not a valid entity or mapped super class.
+     */
+    public function testInvalidEntityOrMappedSuperClassShouldMentionParentClasses()
+    {
+        $this->createClassMetadata('Doctrine\Tests\Models\DDC889\DDC889Class');
+    }
+
+    /**
+     * @group DDC-889
+     * @expectedException Doctrine\ORM\Mapping\MappingException
+     * @expectedExceptionMessage No identifier/primary key specified for Entity "Doctrine\Tests\Models\DDC889\DDC889Entity" sub class of "Doctrine\Tests\Models\DDC889\DDC889SuperClass". Every Entity must have an identifier/primary key.
+     */
+    public function testIdentifierRequiredShouldMentionParentClasses()
+    {
+
+        $factory = $this->createClassMetadataFactory();
+        
+        $factory->getMetadataFor('Doctrine\Tests\Models\DDC889\DDC889Entity');
+    }
 }
 
 /**
@@ -400,7 +496,8 @@ abstract class AbstractMappingDriverTest extends \Doctrine\Tests\OrmTestCase
  * @Table(
  *  name="cms_users",
  *  uniqueConstraints={@UniqueConstraint(name="search_idx", columns={"name", "user_email"})},
- *  indexes={@Index(name="name_idx", columns={"name"}), @Index(name="0", columns={"user_email"})}
+ *  indexes={@Index(name="name_idx", columns={"name"}), @Index(name="0", columns={"user_email"})},
+ *  options={"foo": "bar", "baz": {"key": "val"}}
  * )
  */
 class User
@@ -414,7 +511,7 @@ class User
     public $id;
 
     /**
-     * @Column(length=50, nullable=true, unique=true)
+     * @Column(length=50, nullable=true, unique=true, options={"foo": "bar", "baz": {"key": "val"}})
      */
     public $name;
 
@@ -471,6 +568,7 @@ class User
         $metadata->setInheritanceType(ClassMetadataInfo::INHERITANCE_TYPE_NONE);
         $metadata->setPrimaryTable(array(
            'name' => 'cms_users',
+           'options' => array('foo' => 'bar', 'baz' => array('key' => 'val')),
           ));
         $metadata->setChangeTrackingPolicy(ClassMetadataInfo::CHANGETRACKING_DEFERRED_IMPLICIT);
         $metadata->addLifecycleCallback('doStuffOnPrePersist', 'prePersist');
@@ -489,6 +587,7 @@ class User
            'unique' => true,
            'nullable' => true,
            'columnName' => 'name',
+           'options' => array('foo' => 'bar', 'baz' => array('key' => 'val')),
           ));
         $metadata->mapField(array(
            'fieldName' => 'email',
@@ -590,13 +689,15 @@ class User
 abstract class Animal
 {
     /**
-     * @Id @Column(type="string") @GeneratedValue
+     * @Id @Column(type="string") @GeneratedValue(strategy="CUSTOM")
+     * @CustomIdGenerator(class="stdClass")
      */
     public $id;
 
     public static function loadMetadata(ClassMetadataInfo $metadata)
     {
-
+        $metadata->setIdGeneratorType(ClassMetadataInfo::GENERATOR_TYPE_CUSTOM);
+        $metadata->setCustomGeneratorDefinition(array("class" => "stdClass"));
     }
 }
 
@@ -678,6 +779,42 @@ class DDC1170Entity
     }
 
 }
+
+/**
+ * @Entity
+ * @InheritanceType("SINGLE_TABLE")
+ * @DiscriminatorMap({"ONE" = "DDC807SubClasse1", "TWO" = "DDC807SubClasse2"})
+ * @DiscriminatorColumn(name = "dtype", columnDefinition="ENUM('ONE','TWO')")
+ */
+class DDC807Entity
+{
+    /**
+     * @Id
+     * @Column(type="integer")
+     * @GeneratedValue(strategy="NONE")
+     **/
+   public $id;
+   
+   public static function loadMetadata(ClassMetadataInfo $metadata)
+    {
+         $metadata->mapField(array(
+           'id'                 => true,
+           'fieldName'          => 'id',
+        ));
+
+        $metadata->setDiscriminatorColumn(array(
+            'name'              => "dtype",
+            'type'              => "string",
+            'columnDefinition'  => "ENUM('ONE','TWO')"
+        ));
+
+        $metadata->setIdGeneratorType(ClassMetadataInfo::GENERATOR_TYPE_NONE);
+    }
+}
+
+
+class DDC807SubClasse1 {}
+class DDC807SubClasse2 {}
 
 class Address {}
 class Phonenumber {}
