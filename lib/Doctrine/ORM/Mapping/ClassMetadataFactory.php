@@ -24,6 +24,7 @@ use ReflectionException,
     Doctrine\ORM\EntityManager,
     Doctrine\DBAL\Platforms,
     Doctrine\ORM\Events,
+    Doctrine\Common\Util\ClassUtils,
     Doctrine\Common\Persistence\Mapping\RuntimeReflectionService,
     Doctrine\Common\Persistence\Mapping\ReflectionService,
     Doctrine\Common\Persistence\Mapping\ClassMetadataFactory as ClassMetadataFactoryInterface;
@@ -154,41 +155,44 @@ class ClassMetadataFactory implements ClassMetadataFactoryInterface
      */
     public function getMetadataFor($className)
     {
-        if ( ! isset($this->loadedMetadata[$className])) {
-            $realClassName = $className;
+        if (isset($this->loadedMetadata[$className])) {
+            return $this->loadedMetadata[$className];
+        }
 
-            // Check for namespace alias
-            if (strpos($className, ':') !== false) {
-                list($namespaceAlias, $simpleClassName) = explode(':', $className);
-                $realClassName = $this->em->getConfiguration()->getEntityNamespace($namespaceAlias) . '\\' . $simpleClassName;
+        $realClassName = $className;
 
-                if (isset($this->loadedMetadata[$realClassName])) {
-                    // We do not have the alias name in the map, include it
-                    $this->loadedMetadata[$className] = $this->loadedMetadata[$realClassName];
+        // Check for namespace alias
+        if (strpos($className, ':') !== false) {
+            list($namespaceAlias, $simpleClassName) = explode(':', $className);
+            $realClassName = $this->em->getConfiguration()->getEntityNamespace($namespaceAlias) . '\\' . $simpleClassName;
+        } else {
+            $realClassName = ClassUtils::getRealClass($realClassName);
+        }
 
-                    return $this->loadedMetadata[$realClassName];
-                }
-            }
+        if (isset($this->loadedMetadata[$realClassName])) {
+            // We do not have the alias name in the map, include it
+            $this->loadedMetadata[$className] = $this->loadedMetadata[$realClassName];
+            return $this->loadedMetadata[$realClassName];
+        }
 
-            if ($this->cacheDriver) {
-                if (($cached = $this->cacheDriver->fetch("$realClassName\$CLASSMETADATA")) !== false) {
-                    $this->wakeupReflection($cached, $this->getReflectionService());
-                    $this->loadedMetadata[$realClassName] = $cached;
-                } else {
-                    foreach ($this->loadMetadata($realClassName) as $loadedClassName) {
-                        $this->cacheDriver->save(
-                            "$loadedClassName\$CLASSMETADATA", $this->loadedMetadata[$loadedClassName], null
-                        );
-                    }
-                }
+        if ($this->cacheDriver) {
+            if (($cached = $this->cacheDriver->fetch("$realClassName\$CLASSMETADATA")) !== false) {
+                $this->wakeupReflection($cached, $this->getReflectionService());
+                $this->loadedMetadata[$realClassName] = $cached;
             } else {
-                $this->loadMetadata($realClassName);
+                foreach ($this->loadMetadata($realClassName) as $loadedClassName) {
+                    $this->cacheDriver->save(
+                        "$loadedClassName\$CLASSMETADATA", $this->loadedMetadata[$loadedClassName], null
+                    );
+                }
             }
+        } else {
+            $this->loadMetadata($realClassName);
+        }
 
-            if ($className != $realClassName) {
-                // We do not have the alias name in the map, include it
-                $this->loadedMetadata[$className] = $this->loadedMetadata[$realClassName];
-            }
+        if ($className != $realClassName) {
+            // We do not have the alias name in the map, include it
+            $this->loadedMetadata[$className] = $this->loadedMetadata[$realClassName];
         }
 
         return $this->loadedMetadata[$className];
@@ -326,6 +330,14 @@ class ClassMetadataFactory implements ClassMetadataFactoryInterface
                 $this->addInheritedNamedQueries($class, $parent);
             }
 
+            if ($parent && !empty ($parent->namedNativeQueries)) {
+                $this->addInheritedNamedNativeQueries($class, $parent);
+            }
+
+            if ($parent && !empty ($parent->sqlResultSetMappings)) {
+                $this->addInheritedSqlResultSetMappings($class, $parent);
+            }
+
             $class->setParentClasses($visited);
 
             if ($this->evm->hasListeners(Events::loadClassMetadata)) {
@@ -461,6 +473,58 @@ class ClassMetadataFactory implements ClassMetadataFactoryInterface
                 $subClass->addNamedQuery(array(
                     'name'  => $query['name'],
                     'query' => $query['query']
+                ));
+            }
+        }
+    }
+
+    /**
+     * Adds inherited named native queries to the subclass mapping.
+     *
+     * @since 2.3
+     * @param \Doctrine\ORM\Mapping\ClassMetadata $subClass
+     * @param \Doctrine\ORM\Mapping\ClassMetadata $parentClass
+     */
+    private function addInheritedNamedNativeQueries(ClassMetadata $subClass, ClassMetadata $parentClass)
+    {
+        foreach ($parentClass->namedNativeQueries as $name => $query) {
+            if (!isset ($subClass->namedNativeQueries[$name])) {
+                $subClass->addNamedNativeQuery(array(
+                    'name'              => $query['name'],
+                    'query'             => $query['query'],
+                    'isSelfClass'       => $query['isSelfClass'],
+                    'resultSetMapping'  => $query['resultSetMapping'],
+                    'resultClass'       => $query['isSelfClass'] ? $subClass->name : $query['resultClass'],
+                ));
+            }
+        }
+    }
+
+    /**
+     * Adds inherited sql result set mappings to the subclass mapping.
+     *
+     * @since 2.3
+     * @param \Doctrine\ORM\Mapping\ClassMetadata $subClass
+     * @param \Doctrine\ORM\Mapping\ClassMetadata $parentClass
+     */
+    private function addInheritedSqlResultSetMappings(ClassMetadata $subClass, ClassMetadata $parentClass)
+    {
+        foreach ($parentClass->sqlResultSetMappings as $name => $mapping) {
+            if (!isset ($subClass->sqlResultSetMappings[$name])) {
+                $entities = array();
+                foreach ($mapping['entities'] as $entity) {
+                    $entities[] = array(
+                        'fields'                => $entity['fields'],
+                        'isSelfClass'           => $entity['isSelfClass'],
+                        'discriminatorColumn'   => $entity['discriminatorColumn'],
+                        'entityClass'           => $entity['isSelfClass'] ? $subClass->name : $entity['entityClass'],
+                    );
+                }
+
+                $subClass->addSqlResultSetMapping(array(
+                    'name'          => $mapping['name'],
+                    'columns'       => $mapping['columns'],
+                    'entities'      => $entities,
                 ));
             }
         }
